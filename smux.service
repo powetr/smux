@@ -1,0 +1,14 @@
+[Unit]
+Description=SMUX - Multi-Master Serial Port Multiplexer
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/smux-daemon /etc/smux.conf
+Restart=always
+RestartSec=5
+User=root
+PrivateTmp=false
+
+[Install]
+WantedBy=multi-user.target

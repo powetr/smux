@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+
+CONF="/etc/smux.conf"
+PID_DAEMON=$(pgrep -f smux-daemon | head -n1)
+
+echo -e "\e[1;34m=== SMUX SYSTEM STATUS ===\e[0m"
+if [ -z "$PID_DAEMON" ]; then
+    echo -e "Daemon Status: \e[1;31mSTOPPED (smux.service is down)\e[0m"
+    echo "--------------------------"
+else
+    echo -e "Daemon Status: \e[1;32mRUNNING (PID: $PID_DAEMON)\e[0m"
+    echo "--------------------------"
+fi
+
+if [ ! -f "$CONF" ]; then
+    echo -e "\e[1;31mError: Config file $CONF not found!\e[0m"
+    exit 1
+fi
+
+current_master=""
+declare -A master_devs
+declare -A master_bauds
+declare -A master_slaves
+
+while IFS='= ' read -r key value; do
+    clean_key=$(echo "$key" | xargs 2>/dev/null)
+    clean_val=$(echo "$value" | tr -d '\r' | xargs 2>/dev/null)
+    if [ -z "$clean_key" ]; then continue; fi
+    
+    first_char="${clean_key:0:1}"
+    if [ "$first_char" = ";" ] || [ "$first_char" = "#" ]; then continue; fi
+    
+    case "$clean_key" in
+        "["*"]")
+            section_name="${clean_key:1}"
+            section_name="${section_name%?}"
+            case "$section_name" in
+                master*) current_master="$section_name" ;;
+                *) current_master="" ;;
+            esac
+            ;;
+        *)
+            if [ -n "$current_master" ]; then
+                case "$clean_key" in
+                    device) master_devs["$current_master"]="$clean_val" ;;
+                    baudrate) master_bauds["$current_master"]="$clean_val" ;;
+                    slave*) master_slaves["$current_master"]+=" $clean_val" ;;
+                esac
+            fi
+            ;;
+    esac
+done < "$CONF"
+
+for m in $(echo "${!master_devs[@]}" | tr ' ' '\n' | sort); do
+    dev="${master_devs[$m]}"
+    baud="${master_bauds[$m]:-9600}"
+    
+    echo -e "\e[1m[$m]\e[0m"
+    printf "  Physical Port (%s @ %s baud): " "$dev" "$baud"
+    
+    if [ ! -c "$dev" ]; then
+        echo -e "\e[1;31m[OFFLINE] (Device not connected to USB)\e[0m"
+    else
+        if [ -n "$PID_DAEMON" ] && lsof -p "$PID_DAEMON" 2>/dev/null | grep -q "$dev"; then
+            echo -e "\e[1;32m[ONLINE] (Active and Multiplexed)\e[0m"
+        else
+            echo -e "\e[1;33m[STALE] (Connected, but ignored by daemon)\e[0m"
+        fi
+    fi
+    
+    echo "  Available Student Links:"
+    for slave in ${master_slaves[$m]}; do
+        if [ -L "$slave" ]; then
+            target=$(readlink "$slave")
+            if [ -c "$target" ]; then
+                echo -e "    ├── \e[32m$slave\e[0m -> $target"
+            else
+                echo -e "    ├── \e[31m$slave\e[0m -> \e[31m[BROKEN LINK]\e[0m"
+            fi
+        else
+            echo -e "    ├── \e[33m$slave\e[0m \e[33m[NOT CREATED]\e[0m"
+        fi
+    done
+    echo ""
+done
